@@ -1,0 +1,120 @@
+import praw
+import re
+from collections import Counter
+import logging
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Reddit API Credentials (use environment variables)
+REDDIT_CLIENT_ID = "7ltpBvzIGXyBbvoDwhysFw"
+REDDIT_CLIENT_SECRET = "gR_zny1-iCQN08P0Qs4kgPGjqfaDwQ"
+REDDIT_USER_AGENT = "News Stock Analysis (by u/Niv_Eyal)"
+
+# Words to remove from posts (case insensitive)
+UNNECESSARY_WORDS = ['us', 'eps', 'ceo', 'etf', 'ai', 'ira', 'pe', 'part', 'cd']
+
+def initialize_reddit_api():
+    """Initializes the Reddit API client."""
+    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET:
+        logging.error("Reddit API credentials (client_id and client_secret) are not set as environment variables.")
+        return None
+    try:
+        reddit = praw.Reddit(
+            client_id=REDDIT_CLIENT_ID,
+            client_secret=REDDIT_CLIENT_SECRET,
+            user_agent=REDDIT_USER_AGENT
+        )
+        return reddit
+    except Exception as e:
+        logging.error(f"Error initializing Reddit API: {e}")
+        return None
+
+def fetch_reddit_posts(reddit, subreddits, limit=100):
+    """Fetches recent posts from specified subreddits."""
+    all_posts = []
+    try:
+        for subreddit_name in subreddits:
+            subreddit = reddit.subreddit(subreddit_name)
+            logging.info(f"Fetching posts from r/{subreddit_name}")
+            for post in subreddit.hot(limit=limit):
+                all_posts.append((post.title + " " + post.selftext))  # Store post content
+        return all_posts
+    except Exception as e:
+        logging.error(f"Error fetching posts: {e}")
+        return []
+
+def clean_text(text):
+    """Cleans the text by removing unnecessary words."""
+    # Convert to lowercase and remove unnecessary words
+    words = text.split()
+    cleaned_text = [word for word in words if word.lower() not in UNNECESSARY_WORDS]
+    return " ".join(cleaned_text)
+
+def extract_stock_tickers(posts):
+    """Extracts stock tickers from posts using regular expressions."""
+    tickers = []
+    # Regex pattern for extracting tickers (2-4 uppercase letters)
+    ticker_pattern = re.compile(r'\b([A-Z]{2,4})\b')
+
+    for post in posts:
+        post = clean_text(post)  # Clean post text before extracting tickers
+        matches = ticker_pattern.findall(post)
+        tickers.extend(matches)
+    return tickers
+
+def analyze_sentiment(text):
+    """Analyzes sentiment of text using Vader Sentiment Analyzer."""
+    analyzer = SentimentIntensityAnalyzer()
+    sentiment = analyzer.polarity_scores(text)
+    return sentiment['compound']
+
+def generate_stock_recommendations(posts, min_mentions=5):
+    """Generates stock recommendations based on ticker frequency and sentiment."""
+    tickers = extract_stock_tickers(posts)
+    ticker_counts = Counter(tickers)
+
+    recommendations = []
+    for ticker, count in ticker_counts.items():
+        if count >= min_mentions:  # Apply min_mentions filter here
+            bull_count = 0
+            bear_count = 0
+            for post in posts:
+                if ticker in post:
+                    sentiment_score = analyze_sentiment(post)
+                    if sentiment_score >= 0.05:
+                        bull_count += 1
+                    elif sentiment_score <= -0.05:
+                        bear_count += 1
+
+            recommendations.append((ticker, count, bull_count, bear_count))
+
+    # Sort recommendations by mention count (descending)
+    recommendations.sort(key=lambda x: x[1], reverse=True)
+    return recommendations
+
+def display_recommendations(recommendations):
+    """Displays the stock recommendations to the console with bull and bear counts."""
+    if not recommendations:
+        print("No stock recommendations at the moment.")
+        return
+
+    print("\n=== Stock Recommendations from Reddit ===")
+    for ticker, count, bull_count, bear_count in recommendations:
+        # Use rocket emoji if bullish sentiment
+        rocket = "🚀" if bull_count > bear_count else ""
+        # Adjusted output for larger font size (symbolic representation here, actual font size adjustment is terminal-dependent)
+        print(f"\033[1m{ticker}:\033[0m Mentioned {count} times, Bullish Mentions: {bull_count} {rocket}, Bearish Mentions: {bear_count}")
+
+def main():
+    """Main function to orchestrate the Reddit stock recommendation process."""
+    subreddits = ["stocks", "wallstreetbets", "investing"]
+    reddit = initialize_reddit_api()
+    if reddit:
+        posts = fetch_reddit_posts(reddit, subreddits)
+        recommendations = generate_stock_recommendations(posts)
+        display_recommendations(recommendations)
+
+if __name__ == "__main__":
+    main()
